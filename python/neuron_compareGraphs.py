@@ -1,0 +1,567 @@
+#!/usr/bin/python
+
+
+
+_usageStr=\
+"""usage: neuron_readExportedGeometry.py geoFile
+  get dictionary object describing neuron model geometry info by reading file
+"""
+
+
+
+import os, sys, re, math
+from NeuronGeometry import *
+import numpy as np
+import networkx as nx
+import matplotlib.pyplot as plt
+import pickle
+
+
+
+class HocGeometry(Geometry):
+  def __init__(self, _fileName=None):
+    Geometry.__init__(self)
+    self._openFilament = None
+    self._connections = []
+    self.connections = []
+    self._filamentNames = []
+    self._filaments = {}
+    self._filamentNameType = None
+    self._warnRepeatFilaments = True
+    
+    if _fileName is not None:
+      self.setFileName(_fileName)
+      self.readGeometry()
+      
+  
+  def readGeometry(self):
+    """
+    get dictionary object describing neuron model geometry info by reading file
+    """
+     
+    lineNum = 0
+    with open(self.fileName, 'r') as fIn:
+      # read the geometry file
+      try:
+        for line in fIn:
+          # loop through each line in the file
+          
+          # inc the line number
+          lineNum = lineNum + 1
+          # parse the line in geometry file, adding info to geometryInfo
+          self._parseHocGeometryLine(line)
+    
+      except IOError as err:
+        sys.tracebacklimit = 0
+        raise IOError('Error reading %s line %d: %s' % \
+                      (self.fileName, lineNum, err.message))
+    
+    if self._openFilament:
+      raise IOError('Error reading %s, filament %s open at end of file' %
+                    (self.fileName, self._openFilament))
+    
+    # connect filaments and remove filaments and _connections, leaving segments
+    # and nodes
+    self._connectFilaments()
+    
+    
+    # make compartments from hemispheres remaining at the end of unconnected
+    # segments
+    #self._addOneNodeCompartments()
+    
+
+  def getSomaIndex(self):
+    """
+    return (filamentIndex, position)
+      filamentIndex indexes the .hoc file filament that contains the Soma
+      position is a float between 0 and 1 that points to the soma centroid on
+        the filament
+    """
+    # get the Soma
+    soma = self.soma
+    filamentIndex = self.getFilamentIndex(soma)
+    
+    # get the centroid of the Soma
+    centroid = soma.centroidPosition(mandateTag='Soma')
+
+    return (filamentIndex, centroid)
+
+  
+  def getTipIndices(self):
+    """
+    return (filamentInds, positions)
+      filamentInds is a list of indices to .hoc file filaments that contain
+        terminal segments
+      positions is a list of floats (0 or 1) that point to the terminal end
+        of each terminal segment
+    NOTE: This will NOT contain Axon or Soma even if they are terminal segments
+    """
+    self.checkConnectivity(removeDisconnected=True)
+    
+    soma = self.soma
+    axons = self.findAxons()
+    
+    def _terminalEnd(seg):
+      n0, n1 = False, False
+      for loc, nLoc, node in seg.neighborLocations:
+        if loc == 0.0:
+          if n1:
+            return None
+          else:
+            n0 = True
+        elif loc == 1.0:
+          if n0:
+            return None
+          else:
+            n1 = True
+      if n0:
+        return 1.0
+      else:
+        return 0.0
+    
+    ends = ((self.getFilamentIndex(s), _terminalEnd(s)) for s in self.segments
+            if (s != soma and s not in axons))
+    try:
+      filamentInds, positions = zip( *((f, e) for f, e in ends
+                                     if e is not None))
+    except ValueError:
+      raise ValueError('No tip indices found!?!')
+    
+    return filamentInds, positions
+
+
+  def getSegLengths(self):
+    """
+    return (segLength)
+    """
+    cnt = 0
+    for segs in len(range(self.segments)):
+      cnt += 1
+    
+    return cnt
+
+  
+  def getTips(self):
+    """
+    return (filamentInds, positions)
+      filamentInds is a list of indices to .hoc file filaments that contain
+        terminal segments
+      positions is a list of floats (0 or 1) that point to the terminal end
+        of each terminal segment
+    NOTE: This will NOT contain Axon or Soma even if they are terminal segments
+    """
+    self.checkConnectivity(removeDisconnected=True)
+    
+    soma = self.soma
+    axons = self.findAxons()
+    
+    def _terminalEnd(seg):
+      n0, n1 = False, False
+      for loc, nLoc, node in seg.neighborLocations:
+        if loc == 0.0:
+          if n1:
+            return None
+          else:
+            n0 = True
+        elif loc == 1.0:
+          if n0:
+            return None
+          else:
+            n1 = True
+      if n0:
+        return 1.0
+      else:
+        return 0.0
+    
+    ends = ((s, _terminalEnd(s)) for s in self.segments
+            if (s != soma and s not in axons))
+    try:
+      terminalSegs, positions = zip( *((f, e) for f, e in ends
+                                     if e is not None))
+    except ValueError:
+      raise ValueError('No tip indices found!?!')
+    
+    return terminalSegs, positions
+  
+  
+  def getAxonIndices(self):
+    """
+    return (filamentInds, positions)
+      filamentInds is a list of indices to .hoc file filaments that contain
+        terminating branches
+      positions is a list of floats (0 or 1) that point to the terminal end
+        of each terminating branch
+    """
+    self.checkConnectivity(removeDisconnected=True)
+    axons = self.findAxons()
+    if not axons:
+      return [], []
+    
+    def _terminalEnd(seg):
+      n0, n1 = False, False
+      for loc, nLoc, node in seg.neighborLocations:
+        if loc == 0.0:
+          assert not n1, 'Axon is an isolated segment'
+          n0 = True
+        elif loc == 1.0:
+          assert not n0, 'Axon is an isolated segment'
+          n1 = True
+      if n0:
+        return 1.0
+      else:
+        return 0.0
+    
+    ends = ((self.getFilamentIndex(s), _terminalEnd(s)) for s in axons)
+    filamentInds, positions = zip( *((f, e) for f, e in ends) )
+    
+    return filamentInds, positions
+
+
+  def _parseHocGeometryLine(self, line):
+    """
+    Read a line from hoc file specifying geometry, and update geometryInfo
+    appropriately.
+    openFilament = name of filament if in a declaration block, otherwise = None
+    """
+    splitLine = line.split(None)
+    if not splitLine:
+      return
+    
+    if self._openFilament:
+      self._parseDefineFilament(line)
+    elif splitLine[0] == 'connect':
+      self._addConnection(splitLine)
+    elif splitLine[0] == 'create':
+      self._createFilaments(splitLine)
+    elif splitLine[0] == 'neuron_name':
+      self.name = splitLine[-1]
+    elif splitLine[0].lower() == "range":
+      if len(splitLine) < 7:
+        raise IOError(\
+          'range should be of form "range minX maxX minY maxY minZ maxZ"')
+      self.minRange = tuple([float(x) for x in splitLine[1:6:2]])
+      self.maxRange = tuple([float(x) for x in splitLine[2:7:2]])
+    elif splitLine[0] in self._filamentNames:
+      self._openFilament = splitLine[0]
+    elif splitLine[0]+'[0]' in self._filamentNames:
+      self._openFilament = splitLine[0]+'[0]'
+  
+  def _parseDefineFilament(self, line):
+    """
+    Parse a line in a filament declaration block. Add node, clear nodes, or
+    close block. If multiple nodes are added in one declaration block, connect
+    them. Update geometryInfo['nodes'] and geometryInfo['filaments']
+    appropriately.
+    """
+    splitLine = re.split(',|\)|\(', line.strip())
+    
+    openSegment = self.segments[self._filamentNames.index(self._openFilament)]
+      
+    if splitLine[0] == '}':
+      self._openFilament = None
+    elif splitLine[0] == 'pt3dclear':
+      openSegment.clear()
+    elif splitLine[0] == 'pt3dadd':
+      if not (len(splitLine) == 6 or
+              (len(splitLine) == 7 and splitLine[-2] == '0')):
+        raise IOError('Unexpected form for pt3dadd')
+      x,y,z,d = tuple(float(s) for s in splitLine[1:5])
+      if d <= 0:
+        if d == 0:
+          raise ValueError('pt3dadd with diameter = 0.0')
+        else:
+          raise ValueError('pt3dadd with diameter < 0.0')
+        
+      self._addNode(openSegment, x, y, z, 0.5 * d)
+
+      if len(openSegment.nodes) > 1:
+        node0 = openSegment.nodes[-2]
+        node1 = openSegment.nodes[-1]
+        self._addCompartment(openSegment, node0, node1, append=True)
+    else:
+      raise IOError('Invalid filament command')
+
+
+  def _addConnection(self, splitLine):
+    """
+    Return dict describing connection between two filaments
+    """
+    (name1, location1) = re.split('\(|\)', splitLine[1])[0:2]
+    (name2, location2) = re.split('\(|\)', splitLine[2])[0:2]
+    
+    connection = { \
+      'filament1' : name1, \
+      'location1' : float(location1), \
+      'filament2' : name2, \
+      'location2' : float(location2) \
+    }
+    self._connections.append(connection)
+    self.connections.append(connection)
+
+
+  def _createFilaments(self, splitLine):
+    """
+    Add requested number of filaments to geometry, as segments
+    """
+    if '[' and ']' in splitLine[1]:
+      # hoc produced by Imaris, requests variable number of filaments
+      # create baseName[numFilaments]
+      baseName, numFilamentsStr = re.split('\[|\]', splitLine[1])[0:2]
+      numFilaments = int(numFilamentsStr)
+      if self._filamentNameType in [None, 'Imaris']:
+        self._filamentNameType = 'Imaris'
+      else:
+        self._filamentNameType = 'Mixed'
+        warn('Filament index will not reliably match numbers in filament name')
+      thisType = 'Imaris'
+    else:
+      # hoc produce by Amira, requests 1 filament
+      # create baseName
+      baseName, numFilaments = splitLine[1], 1
+      if self._filamentNameType in [None, 'Amira']:
+        self._filamentNameType = 'Amira'
+      else:
+        self._filamentNameType = 'Mixed'
+        warn('Filament index will not reliably match numbers in filament name')
+      thisType = 'Amira'
+    
+    for n in range(numFilaments):
+      if thisType == 'Imaris':
+        name = '%s[%d]' % (baseName, n)
+      else:
+        name = baseName
+      if name in self._filamentNames:
+        raise IOError('%s already created' % name)
+      newSeg = self._addSegment(name)
+      newSeg.filamentIndex = len(self._filamentNames)
+      self._filamentNames.append(name)
+      self._filaments[newSeg.filamentIndex] = newSeg
+
+
+  def _connectFilaments(self):
+    """
+    Loop through requested filament _connections.
+    For each connection connect two filaments together by joining the nodes at
+      their ends. Note that this removes a node for each connection
+    """
+    def _getSegmentFromFilament(_filament):
+      _segment = self._filaments[self._filamentNames.index(_filament)]
+      return _segment      
+    
+    while self._connections:
+      connection = self._connections.pop()
+      
+      # get the filaments and locations
+      location0 = connection['location2']
+      filament0 = connection['filament2']
+      segment0 = _getSegmentFromFilament(filament0)
+
+      location1 = connection['location1']
+      filament1 = connection['filament1']
+      segment1 = _getSegmentFromFilament(filament1)
+      
+      self._connectSegments(segment0, location0, segment1, location1)
+    
+    self.nodes = [n for n in self.nodes if n not in self._removeNodes]
+    self._removeNodes = set()
+
+  
+  def getFilamentIndex(self, seg):
+    """
+    Return index to filament from original .hoc file
+    """
+    #filamentIndex = int(seg.name.split('[')[1].split(']')[0])
+    return seg.filamentIndex
+    
+  
+  def getFilament(self, index):
+    """
+    return a segment based upon filament number
+    """
+    return self._filaments[index]
+      
+
+
+###############################################################################
+def _parseArguments():
+  arguments = sys.argv
+  
+  if len(arguments) != 3:
+    print(_usageStr)
+    raise TypeError('Incorrect number of arguments. Two hoc files needed.')
+  
+  refFile, testFile = arguments[1], arguments[2]
+  return refFile, testFile
+
+
+def suggestProps(geometry, tau_m=215.2, tau_1=29.0, R_0=2.1, R_in=9.7):
+  # R in MOhm, Tau in ms
+  Cm = 1.0 # uF/cm^2, gospel
+  Rm = 1.0e-3 * tau_m / Cm  # MOhm cm^2
+  g1 = 1.0e-6 / Rm # S/cm^2
+  RTau1 = 1.0e-3 * tau_1 / Cm
+  g2 = 1.0e-6 / RTau1
+  
+  somaArea = geometry._soma.surfaceArea * 1.0e-2
+  cellArea = geometry.surfaceArea * 1.0e-2
+  
+  g3 = 1.0e-6 / R_0 / somaArea
+  g4 = 1.0e-6 / R_0 / cellArea
+  g5 = 1.0e-6 / R_in / somaArea
+  g6 = 1.0e-6 / R_in / cellArea
+  
+  print('Potential leak conductances:')
+  print(g1, g2, g3, g4, g5, g6)
+  
+
+
+def getBasicProps(geometry):
+  """
+  Find and return the basic properties of a geometry file
+  includes: # bifurcations, fractal dim(?), total length, fit of path
+            length dist., fit of path tortuosities dist.
+  """
+  def dist(pt1, pt2):
+    return math.sqrt((pt2[0]-pt1[0])**2+(pt2[1]-pt1[1])**2+(pt2[2]-pt1[2])**2)
+  
+  # span and num. of bifurcations
+  span = 0
+  bifs = []
+  print('Finding span of %s ... ' %geometry.name)
+  for s in geometry.segments:
+    curr = set(s.neighbors) # bifurcations, order doens't matter
+    curr.add(s.name)
+    if curr not in bifs:
+      bifs.append(curr) # if this bif doesn't already exist, add it
+    for n in range(len(s.nodes)-1):
+      span = span + dist([s.nodes[n].x, s.nodes[n].y, s.nodes[n].z],
+                         [s.nodes[n+1].x, s.nodes[n+1].y, s.nodes[n+1].z])
+  numBifs = len(bifs)
+  
+  return numBifs, span
+
+
+
+def fitDistribution(dist, show=True):
+  # Using scipy.optimize.curve_fit
+  from scipy.optimize import curve_fit
+  dist = np.array(dist)
+  bins, edgess = np.histogram(dist, bins=int(len(dist)/5))
+  edges = [(edgess[i]+edgess[i+1])/2 for i in range(len(edgess)-1)]
+  cdist = np.cumsum(bins) # here x = edges, y = cdist
+  cdist = [i/max(cdist) for i in cdist]
+  edges = [i/max(edges) for i in edges]
+  
+  blah = {'edges': edges, 'cdist': cdist}
+  pickle.dump(blah, open('last_dictionary_comparegraphs.p', 'wb'))
+  #print(edges, cdist)
+  #print(bins)
+  
+  # since cumulative, fit as sigmoid
+  def sigmoid(x, x0, k):
+    y = 1 / (1 + np.exp(-k*(x-x0)))
+    return y
+  
+  popt, pcov = curve_fit(sigmoid, edges, cdist)
+  # print(popt) # prints x0 and k as popt[0] and popt[1]
+  
+  #plotting
+  if show == True:
+    x = np.linspace(min(edges), max(edges), 50)
+    y = sigmoid(x, *popt)
+    plt.plot(edges, cdist, 'o', label='data')
+    plt.plot(x,y,label='fit')
+    #plt.xlim(
+    plt.legend(loc='best')
+    plt.show()
+  
+  return popt
+
+
+
+  
+def compareProps(refgeo, testgeo):
+  # calls a bunch of stuff to compare the different cell geometries
+  from scipy.stats import ttest_ind
+  
+  refbifs, refspan = getBasicProps(refgeo)
+  testbifs, testspan = getBasicProps(testgeo)
+  print('Running getProperties...')
+  refprops, _ = refgeo.getProperties()
+  testprops, _ = testgeo.getProperties()
+  # print(refprops['Tortuosity'])
+  reftorts, refpaths = refprops['Tortuosity'], refprops['Path Length']
+  testtorts, testpaths = testprops['Tortuosity'], testprops['Path Length']
+  reftortfit = fitDistribution(reftorts)
+  testtortfit = fitDistribution(testtorts)
+  refpathfit = fitDistribution(refpaths)
+  testpathfit = fitDistribution(testpaths)
+  
+  _, ptort = ttest_ind(reftorts, testtorts)
+  _, ppath = ttest_ind(refpaths, testpaths)
+  
+  def report_t(pval, prop):
+    if pval <= 0.05:
+      print('%s is significantly different at p=%.5f' %(prop, pval))
+    else:
+      print('%s is not significantly different at p=%.5f' %(prop, pval))
+  report_t(ptort, 'Path tortuosity')
+  report_t(ppath, 'Path length')
+  
+  def report_fit(popt1, popt2, prop):
+    print('%s fitted is (x0, k): %s: %.5f, %.5f, \n    %s: %.5f, %.5f' \
+          %(prop, refgeo.name, popt1[0], popt1[1],
+                  testgeo.name, popt2[0], popt2[1]))
+  report_fit(reftortfit, testtortfit, 'Path tortuosity')
+  report_fit(refpathfit, testpathfit, 'Path length')                             
+  
+  return
+
+
+
+
+def demoRead(refFile, testFile):
+  ### Read in geometry file and pre-compute various quantities
+  refgeo, testgeo = HocGeometry(refFile), HocGeometry(testFile)
+  
+  reftips, reftipPositions = refgeo.getTips()
+  testtips, testtipPositions = testgeo.getTips()
+  refpDF = PathDistanceFinder(refgeo, refgeo.soma)
+  #tortuosities = [geometry.pathTortuosity(pDF.pathTo(tip, pos))
+  #                for tip, pos in zip(tips, tipPositions)]
+  reftortuosities = [refpDF.tortuosityTo(tip, pos)
+                  for tip, pos in zip(reftips, reftipPositions)]
+  refmeanTort, refstdTort = mean(reftortuosities), std(reftortuosities)
+  testpDF = PathDistanceFinder(testgeo, testgeo.soma)
+  #tortuosities = [geometry.pathTortuosity(pDF.pathTo(tip, pos))
+  #                for tip, pos in zip(tips, tipPositions)]
+  testtortuosities = [testpDF.tortuosityTo(tip, pos)
+                  for tip, pos in zip(testtips, testtipPositions)]
+  testmeanTort, teststdTort = mean(testtortuosities), std(testtortuosities)
+
+  compareProps(refgeo, testgeo)
+  #print('From soma to tips, tortuosity is %.1f +- %.1f'
+  #      % (meanTort, stdTort))
+  """
+  Cons =  geometry.connections
+  Seg1s, Seg2s = [], []
+  for c in Cons:
+    Seg1s.append(c['filament1']) # here, location1 is always 0
+    Seg2s.append(c['filament2']) # here, location2 is always 1
+    #geometry.c['filament1'].coordAt(c['location1'])
+  """
+  return
+  #
+  
+    
+    
+
+
+###############################################################################
+if __name__ == "__main__":
+  # get the geometry file
+  refFile, testFile = _parseArguments()
+  # run a demo of capabilities
+  demoRead(refFile, testFile)
+  #exit
+  sys.exit(0)
