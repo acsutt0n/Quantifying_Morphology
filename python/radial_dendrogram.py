@@ -1,10 +1,27 @@
+# radial_dendrogram.py
+# This creates a radial dendrogram of a hoc/geometry object
+# Lengths are constant for the moment, might try to change this
+#   in the future
+
+
+
 import numpy as np
 import matplotlib.pyplot as plt
-
-
 from math import cos, sin
 from numpy import r_
 from numpy import atleast_2d as a2d
+from neuron_readExportedGeometry import *
+from numpy import pi
+
+
+
+########################################################################
+# Smaller functions 
+
+def angle_span(angle, num):
+  """ """
+  return np.linspace(angle[0],angle[1],num)
+
 def from_polar(p):
   """(theta, radius) to (x, y)."""
   return _a(cos(p[0])* p[1], sin(p[0])* p[1])
@@ -17,39 +34,51 @@ def to_polar(c):
   return _a(arctan2(c[1], c[0]), (c** 2).sum(0)** .5)
 
 
+def get_branch(geo, seg):
+  return [branch for branch in geo.branches if seg.name in branch.tags][0]
 
-# working version
-def get_layers(geo):
-  seglist = [geo.soma]
-  layers, count = [], -1
-  while len(seglist) > 0:
-    count = count + 1
-    sofar, newseglist = 0, []
-    layers.append([])
-    for s in range(len(seglist)):
-      layers[count].append([]) # add the s-th list
-      nc = 0
-      for n in seglist[s].neighbors:
-        if n not in newseglist:
-          newseglist.append(n)
-          nc = nc + 1
-      if nc > 0:
-        layers[count][s].append(nc)
-        
-    print(len(layers[-1]))
-    if len(newseglist) == len(seglist):
+
+
+def branch_layers(geo):
+  """ 
+  Same as above but uses branches, much more better.
+  branchlist    : branches to be examined for neighbors
+  used          : branches that are spent (already examined)
+  newbranchlist : neighbors that will be checked upon next iteration
+                  when they become branchlist
+  """
+  branchlist = [get_branch(geo, geo.soma)]
+  layers, used, cnt = [], [get_branch(geo, geo.soma)], -1
+  while len(branchlist) > 0:
+    cnt += 1
+    newbranchlist = []
+    layers.append([]) # Add a new layer
+    
+    for s in range(len(branchlist)): # Go through each of the "new" branches
+      used.append(branchlist[s]) # Don't want this one included in future neighbors
+      layers[cnt].append([]) # Add the s-th item of this layer
+      nebcnt = 0 # Which is initialized with 0 branches (neighbors)
+      for n in branchlist[s].neighbors: # For each neighboring branch
+        if n not in used and n not in newbranchlist:
+          newbranchlist.append(n)
+          nebcnt += 1 # Increment neighbor count
+      if nebcnt > 0:
+        layers[cnt][s].append(nebcnt) # Add any new layers
+    
+    print(len(layers[-1])) # Still in while loop
+    if len(newbranchlist) == len(branchlist): # No new layers found
       break
-    seglist = [i for i in newseglist]
+    # Else, replace branchlist and continue to next layer
+    branchlist = [i for i in newbranchlist]
   return layers
 
 
 
-def angle_span(angle, num):
-  return np.linspace(angle[0],angle[1],num)
-
 
 
 def stem(ang_bounds, num, rad):
+  """"
+  """
   # return new base points
   num = num + num + 1
   ang = np.linspace(ang_bounds[0], ang_bounds[1],num)
@@ -64,6 +93,8 @@ def stem(ang_bounds, num, rad):
 
 
 def concat_points(new_pts, new_bounds, prevpt, pts, connections, bounds):
+  """
+  """
   for p in range(len(new_pts)):
     pts.append(new_pts[p])
     connections.append([pts.index(prevpt),pts.index(new_pts[p])])
@@ -73,6 +104,8 @@ def concat_points(new_pts, new_bounds, prevpt, pts, connections, bounds):
 
 
 def many_completed(layers, l):
+  """
+  """
   # l is current layer, so layers[:l] are completed
   comp = 1 # start at 1 for origin
   for j in layers[:l]:
@@ -97,31 +130,122 @@ def many_completed(layers, l):
 #                       Start here for constant length                   #
 ##########################################################################
 
-from neuron_readExportedGeometry import *
-import numpy as np
-import matplotlib.pyplot as plt
-geo = demoRead('/home/alex/data/morphology/morphology-hoc-files/morphology/analyze/803_151_63x_IM_69.hoc')
-layers = get_layers(geo)
-from numpy import pi
+
+
+def get_started(geo):
+  """
+  """
+  # Figure out how many branches come off the the primary neurite
+  used, nebs, currseg = [], [geo.soma], geo.soma
+  while len(nebs) < 2:
+    currseg = nebs[0] # len(nebs) must be 1
+    used.append(currseg)
+    nebs = [] # Only un-used segments count as neighbors here
+    for n in currseg.neighbors:
+      if n not in used:
+        nebs.append(n)
+    # Should check len(nebs), is == 1 continue, else exit loop
+  
+  if len(nebs) == 2: # for 2-point starters:
+    pts = [ [0,0],[3*pi/2,1],[pi/2,1] ]
+    connections = [[0,1],[0,2]]
+    prevpt = [pi/2,1]
+    bounds = [ [0,2*pi], [pi,2*pi], [0,pi] ]
+    
+  elif len(nebs) == 3: # for 3-point starters
+    pts = [ [0,0], [2*pi/3,1], [4*pi/3,1], [0,1] ]
+    connections = [[0,1],[0,2], [0,3]]
+    prevpt = [2*pi/3,1]
+    bounds = [ [0,2*pi], [pi/3, pi], [pi, 5*pi/3], [5*pi/3, pi/3] ]
+  
+  elif len(nebs) == 4: # for 4-point starters
+    pts = [ [0,0],[pi/4,1],[3*pi/4,1],[7*pi/4,1], [5*pi/4,1] ]
+    connections = [[0,1],[0,2], [0,3], [0,4]]
+    prevpt = [pi/4,1]
+    # new_pts, new_bounds = stem([0,pi],layersB[1][0][0], 2)
+    bounds = [[0,2*pi],[0,pi/2],[pi/2,pi],[3*pi/2,2*pi],[pi,3*pi/2]]
+  
+  else:
+    print("Don't know how to handle %i starting points" %len(nebs))
+    return None
+  return pts, connections, prevpt, bounds
 
 
 
-## for 2-point starters:
-pts = [ [0,0],[3*pi/2,1],[pi/2,1] ]
-connections = [[0,1],[0,2]]
-prevpt = [pi/2,1]
-bounds = [ [0,2*pi], [pi,2*pi], [0,pi] ]
+def next_layer(layers, n, pts, bounds, connections):
+  """ 
+  Map up to _n_ layers.
+  """
+  completed = many_completed(layers, n-1)
+  for l in range(len(layers[n])):
+    if layers[n][l]:
+      prevpt = pts[completed+l] # changed from pts[completed+l]
+      new_pts, new_bounds = stem(bounds[completed+l], layers[n][l][0], n+1)
+      pts, connections, bounds = concat_points(new_pts, new_bounds, prevpt,
+                                               pts, connections, bounds)
+  return pts, bounds, connections
 
-## for 4-point starters
-pts = [ [0,0],[pi/4,1],[3*pi/4,1],[7*pi/4,1], [5*pi/4,1] ]
-connections = [[0,1],[0,2], [0,3], [0,4]]
-prevpt = [pi/4,1]
-# new_pts, new_bounds = stem([0,pi],layersB[1][0][0], 2)
-bounds = [[0,2*pi],[0,pi/2],[pi/2,pi],[3*pi/2,2*pi],[pi,3*pi/2]]
+
+
+def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
+  """
+  """
+  if type(geo) is str:
+    geo = demoReadsilent(geo)
+  # Get started
+  pts, connections, prevpt, bounds = get_started(geo)
+  # Get the layers
+  layers = branch_layers(geo)
+  # Create the radial structure for _nlayers_
+  for layer in range(1, nlayers):
+    pts, bounds, connections = next_layer(layers, layer, pts, bounds,
+                                          connections)
+  
+  # Then plot
+  # convert to rectalinear points from polar
+  rpts = [from_polar(p) for p in pts]
+  if colors is None:
+    colors = ['k' for i in range(3000)] # Should be large enough
+  if colors is 'trippy':
+    colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*100
+  gols = [colors[p[-1]] for p in pts] # polar points
+  plot_radial_dend(connections, rpts, colors)
+  
+  return
 
 
 
+
+#################################################################### 
+# plotting
+
+
+
+def plot_radial_dend(connections, pts, colors=None):
+  fig = plt.figure()
+  ax = fig.add_subplot(111)
+  ax.scatter(0.5,0, c='k', s=50)
+  ax.plot([0.5,0],[0,0], c='k')
+  for c in connections:
+    if colors:
+      col = colors[connections.index(c)]
+    else:
+      col='k'
+    ax.plot([pts[c[0]][0], pts[c[1]][0]], 
+            [pts[c[0]][1], pts[c[1]][1]], c=col) # omit c for multicolored (kinda fun)
+  plt.show(); return
+
+
+
+
+
+
+
+########################################################################
+
+"""
 # sample
+
 pts = [ [0,0],[pi/4,1],[3*pi/4,1],[7*pi/4,1], [5*pi/4,1] ]
 connections = [[0,1],[0,2], [0,3], [0,4]]
 prevpt = [pi/4,1]
@@ -146,43 +270,7 @@ for l in range(len(layers[2])):
     pts, connections, bounds = concat_points(new_pts, new_bounds, prevpt,
                                              pts, connections, bounds)
 
-
-
-####################### money function ######################
-def next_layer(layers, n, pts, bounds, connections):
-  completed = many_completed(layers, n-1)
-  for l in range(len(layers[n])):
-    if layers[n][l]:
-      prevpt = pts[completed+l] # changed from pts[completed+l]
-      new_pts, new_bounds = stem(bounds[completed+l], layers[n][l][0], n+1)
-      pts, connections, bounds = concat_points(new_pts, new_bounds, prevpt,
-                                               pts, connections, bounds)
-  return pts, bounds, connections
-
-
-
-
-
-##################### plotting #######################
-# convert to rectalinear points from polar
-rpts = [from_polar(p) for p in pts]
-# colors:
-cols = ['b','g','r','c','m','y','k']*40 # 7*40 must be less than max radius
-gols = [cols[p[-1]] for p in pts] # polar points
-
-def plot_radial_dend(connections, pts, colors=None):
-  fig = plt.figure()
-  ax = fig.add_subplot(111)
-  ax.scatter(0.5,0, c='k', s=50)
-  ax.plot([0.5,0],[0,0], c='k')
-  for c in connections:
-    if colors:
-      col = colors[connections.index(c)]
-    else:
-      col='k'
-    ax.plot([pts[c[0]][0], pts[c[1]][0]], 
-            [pts[c[0]][1], pts[c[1]][1]], c=col) # omit c for multicolored (kinda fun)
-  plt.show()
+"""
 
 
 
@@ -250,10 +338,28 @@ def many_skeletons(geofiles, labels=None):
   
   
   
+#########################################################################
+
+if __name__ == "__main__":
+  if len(sys.argv) < 2:  # python radial(0) geofile(1)
+    geo = demoReadsilent('/home/alex/data/morphology/morphology-hoc-files/morphology/analyze/803_151_63x_IM_69.hoc')
+  else:
+    try:
+      geo = demoReadsilent(sys.argv[1])
+    except:
+      print("Couldn't use %s, using sample file instead" %sys.argv[1])
+      geo = demoReadsilent('/home/alex/data/morphology/morphology-hoc-files/morphology/analyze/803_151_63x_IM_69.hoc')
+  radial_dendrogram(geo, show=True_)
+  
+  
+  
 
 
 
-# bad version ################################
+#########################################################################
+# old code -- NOT IN USE
+
+
 def get_layers(geo):
   seglist = [geo.soma]
   layers, count = [], -1
@@ -282,6 +388,33 @@ def get_layers(geo):
   return layers
 
 
+
+
+def get_layers(geo):
+  """
+  """
+  seglist = [geo.soma]
+  layers, count = [], -1
+  while len(seglist) > 0:
+    count = count + 1 # Keep track of current layer
+    sofar, newseglist = 0, []
+    layers.append([]) # Add a new layer list
+    for s in range(len(seglist)):
+      layers[count].append([]) # add the s-th list
+      nc = 0 # Neighbor count
+      for n in seglist[s].neighbors: # For each segment ...
+        if n not in newseglist:  #        ... if we haven't gotten its neighbors....
+          newseglist.append(n)   #        ... add those neighbors
+          nc = nc + 1  # increment the count
+      if nc > 0: # If there were any new neighbors (new layer) ...
+        layers[count][s].append(nc) #     ... add them
+        
+    print(len(layers[-1])) # Number of NEWEST neighbors found
+    if len(newseglist) == len(seglist): # If we haven't found any new layers
+      break
+    # Else, re-wite seglist to prepare for next layer
+    seglist = [i for i in newseglist]
+  return layers
 
 
 
