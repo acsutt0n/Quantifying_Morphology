@@ -39,7 +39,7 @@ def get_branch(geo, seg):
 
 
 
-def branch_layers(geo):
+def branch_layers(geo, nlayers=None):
   """ 
   Same as above but uses branches, much more better.
   branchlist    : branches to be examined for neighbors
@@ -47,10 +47,12 @@ def branch_layers(geo):
   newbranchlist : neighbors that will be checked upon next iteration
                   when they become branchlist
   """
+  if nlayers is None:
+    nlayers = np.inf # Get all layers
   branchlist = [get_branch(geo, geo.soma)]
   layers, used, cnt = [], [get_branch(geo, geo.soma)], -1
-  while len(branchlist) > 0:
-    cnt += 1
+  while len(branchlist) > 0 and cnt <= nlayers:
+    cnt += 1 # Layer count
     newbranchlist = []
     layers.append([]) # Add a new layer
     
@@ -65,7 +67,7 @@ def branch_layers(geo):
       if nebcnt > 0:
         layers[cnt][s].append(nebcnt) # Add any new layers
     
-    print(len(layers[-1])) # Still in while loop
+    # print(len(layers[-1])) # Still in while loop
     if len(newbranchlist) == len(branchlist): # No new layers found
       break
     # Else, replace branchlist and continue to next layer
@@ -189,15 +191,16 @@ def next_layer(layers, n, pts, bounds, connections):
 
 def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
   """
+  Can be run for many if type(geofiles) is list.
   """
   if type(geo) is str:
-    geo = demoReadsilent(geo)
+    geo = [demoReadsilent(geo)]
   # Get started
   pts, connections, prevpt, bounds = get_started(geo)
   # Get the layers
-  layers = branch_layers(geo)
+  layers = branch_layers(geo, nlayers)
   # Create the radial structure for _nlayers_
-  for layer in range(1, nlayers):
+  for layer in range(1, len(layers)):
     pts, bounds, connections = next_layer(layers, layer, pts, bounds,
                                           connections)
   
@@ -208,7 +211,6 @@ def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
     colors = ['k' for i in range(3000)] # Should be large enough
   if colors is 'trippy':
     colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*100
-  gols = [colors[p[-1]] for p in pts] # polar points
   plot_radial_dend(connections, rpts, colors)
   
   return
@@ -222,19 +224,36 @@ def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
 
 
 def plot_radial_dend(connections, pts, colors=None):
-  fig = plt.figure()
-  ax = fig.add_subplot(111)
-  ax.scatter(0.5,0, c='k', s=50)
-  ax.plot([0.5,0],[0,0], c='k')
+  """
+  Returns a plot -- but does not show it (allows for subplots).
+  """
+  #fig = plt.figure()
+  # ax = fig.add_subplot(111)
+  plt.scatter(0.5,0, c='k', s=50)
+  plt.plot([0.5,0],[0,0], c='k')
   for c in connections:
     if colors:
       col = colors[connections.index(c)]
     else:
       col='k'
-    ax.plot([pts[c[0]][0], pts[c[1]][0]], 
-            [pts[c[0]][1], pts[c[1]][1]], c=col) # omit c for multicolored (kinda fun)
-  plt.show(); return
+    plt.plot([pts[c[0]][0], pts[c[1]][0]], 
+             [pts[c[0]][1], pts[c[1]][1]], c=col) # omit c for multicolored (kinda fun)
 
+
+
+def many_radial_dend(geofiles, nlayers=None):
+  """
+  Plot many radial dendrograms in a subplot.
+  """
+  # 4 in a row
+  dims = [int(len(geofiles)/4.+1),4]
+  for g in range(len(geofiles)):
+    plt.subplot(dims[0], dims[1], g+1)
+    radial_dendrogram(geofiles[g], nlayers=nlayers, colors=None)
+    plt.title(geofiles[g].name)
+    # Get rid of side labels
+    plt.axis('off')
+  plt.show()
 
 
 

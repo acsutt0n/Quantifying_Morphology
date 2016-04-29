@@ -314,7 +314,14 @@ def num_daughters(geo, branch=False, clean=True):
 
 
 
-  
+def degree_percent(deglist):
+  """
+  Return the % of branch degrees in each furcation,
+  eg: [2,2,2,2,3,3] --> 2: 66%, 3: 34%
+  """
+  uniq = list(set(deglist))
+  counts = {i: float(deglist.count(i))/len(deglist) for i in uniq}
+  return counts
 
 
 
