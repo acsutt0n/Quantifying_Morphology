@@ -86,4 +86,4 @@ if __name__ == '__main__':
   else:
     skeletonFile = 'skeleton_points.txt'
   
-  getSkeleton(hocFile, skeletonFile, wwrite=1)
+  simpleSkeleton(hocFile, skeletonFile)

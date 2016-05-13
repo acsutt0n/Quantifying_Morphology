@@ -3,7 +3,7 @@
 
 
 def getCarrierPoints(hocFile):
-  
+  return  
 
 
 class Section:

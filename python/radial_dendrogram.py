@@ -39,7 +39,7 @@ def get_branch(geo, seg):
 
 
 
-def branch_layers(geo, nlayers=None):
+def branch_layers(geo, nlayers=None, id_axons=None):
   """ 
   Same as above but uses branches, much more better.
   branchlist    : branches to be examined for neighbors
@@ -47,6 +47,7 @@ def branch_layers(geo, nlayers=None):
   newbranchlist : neighbors that will be checked upon next iteration
                   when they become branchlist
   """
+  axon_dict = []
   if nlayers is None:
     nlayers = np.inf # Get all layers
   branchlist = [get_branch(geo, geo.soma)]
@@ -60,7 +61,15 @@ def branch_layers(geo, nlayers=None):
       used.append(branchlist[s]) # Don't want this one included in future neighbors
       layers[cnt].append([]) # Add the s-th item of this layer
       nebcnt = 0 # Which is initialized with 0 branches (neighbors)
+      
       for n in branchlist[s].neighbors: # For each neighboring branch
+        if id_axons is None: # Use native axon tags
+          if 'Axon' in n.tags:
+            axon_dict.append([cnt, s, geo.branches.index(n)])
+          else: # Use the geo.branches index
+            for ax in id_axons:
+              if geo.branches.index(n) == ax:
+                axon_dict.append([cnt, s, geo.branches.index(n)])
         if n not in used and n not in newbranchlist:
           newbranchlist.append(n)
           nebcnt += 1 # Increment neighbor count
@@ -72,7 +81,7 @@ def branch_layers(geo, nlayers=None):
       break
     # Else, replace branchlist and continue to next layer
     branchlist = [i for i in newbranchlist]
-  return layers
+  return layers, axon_dict
 
 
 
@@ -132,10 +141,11 @@ def many_completed(layers, l):
 #                       Start here for constant length                   #
 ##########################################################################
 
+# RADIAL
 
-
-def get_started(geo):
+def get_started_radial(geo, rrange=[0,2*pi]):
   """
+  rrange always starts at 0.
   """
   # Figure out how many branches come off the the primary neurite
   used, nebs, currseg = [], [geo.soma], geo.soma
@@ -149,23 +159,28 @@ def get_started(geo):
     # Should check len(nebs), is == 1 continue, else exit loop
   
   if len(nebs) == 2: # for 2-point starters:
-    pts = [ [0,0],[3*pi/2,1],[pi/2,1] ]
+    pts = [ [0,0],[3*(rrange[1])/4,1],[1*rrange[1]/4,1] ]
     connections = [[0,1],[0,2]]
     prevpt = [pi/2,1]
-    bounds = [ [0,2*pi], [pi,2*pi], [0,pi] ]
+    bounds = [ rrange, [rrange[1]/2,rrange[1]], [0, rrange[1]/2] ]
     
   elif len(nebs) == 3: # for 3-point starters
-    pts = [ [0,0], [2*pi/3,1], [4*pi/3,1], [0,1] ]
+    pts = [ [0,0], [(rrange[1])/3,1], [2*(rrange[1])/3,1], [0,1] ]
     connections = [[0,1],[0,2], [0,3]]
     prevpt = [2*pi/3,1]
-    bounds = [ [0,2*pi], [pi/3, pi], [pi, 5*pi/3], [5*pi/3, pi/3] ]
+    bounds = [ rrange, [0.5*(rrange[1])/3, 1.5*(rrange[1])/3], 
+                       [(rrange[1])/2, 2.5*(rrange[1])/3], 
+                       [2.5*(rrange[1])/3, 0.5*(rrange[1])/3] ]
   
   elif len(nebs) == 4: # for 4-point starters
-    pts = [ [0,0],[pi/4,1],[3*pi/4,1],[7*pi/4,1], [5*pi/4,1] ]
+    pts = [ [0,0],[1*(rrange[1])/8,1],[3*(rrange[1])/8,1],
+            [5*(rrange[1])/8,1], [7*(rrange[1])/8,1] ]
     connections = [[0,1],[0,2], [0,3], [0,4]]
     prevpt = [pi/4,1]
     # new_pts, new_bounds = stem([0,pi],layersB[1][0][0], 2)
-    bounds = [[0,2*pi],[0,pi/2],[pi/2,pi],[3*pi/2,2*pi],[pi,3*pi/2]]
+    bounds = [rrange, [0, 2*(rrange[1])/8], [2*(rrange[1])/8, 4*(rrange[1])/8],
+                      [4*(rrange[1])/8, 6*(rrange[1])/8],
+                      [6*(rrange[1])/8, 0]]
   
   else:
     print("Don't know how to handle %i starting points" %len(nebs))
@@ -189,16 +204,17 @@ def next_layer(layers, n, pts, bounds, connections):
 
 
 
-def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
+def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy',
+                      rrange=[0,2*pi], id_axons=None):
   """
   Can be run for many if type(geofiles) is list.
   """
   if type(geo) is str:
     geo = [demoReadsilent(geo)]
   # Get started
-  pts, connections, prevpt, bounds = get_started(geo)
+  pts, connections, prevpt, bounds = get_started_radial(geo, rrange)
   # Get the layers
-  layers = branch_layers(geo, nlayers)
+  layers, axon_dict = branch_layers(geo, nlayers, id_axons)
   # Create the radial structure for _nlayers_
   for layer in range(1, len(layers)):
     pts, bounds, connections = next_layer(layers, layer, pts, bounds,
@@ -210,10 +226,89 @@ def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
   if colors is None:
     colors = ['k' for i in range(3000)] # Should be large enough
   if colors is 'trippy':
-    colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*100
-  plot_radial_dend(connections, rpts, colors)
+    colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*600
+  plot_radial_dend(connections, rpts, colors, axon_dict)
   
   return
+
+# RECTANGULAR
+
+
+def get_started_rect(geo, rrange=[0,2*pi]):
+  """
+  rrange always starts at 0.
+  """
+  # Figure out how many branches come off the the primary neurite
+  used, nebs, currseg = [], [geo.soma], geo.soma
+  while len(nebs) < 2:
+    currseg = nebs[0] # len(nebs) must be 1
+    used.append(currseg)
+    nebs = [] # Only un-used segments count as neighbors here
+    for n in currseg.neighbors:
+      if n not in used:
+        nebs.append(n)
+    # Should check len(nebs), is == 1 continue, else exit loop
+  
+  if len(nebs) == 2: # for 2-point starters:
+    pts = [ [0,0],[3*(rrange[1])/4,1],[1*rrange[1]/4,1] ]
+    connections = [[0,1],[0,2]]
+    prevpt = [pi/2,1]
+    bounds = [ rrange, [rrange[1]/2,rrange[1]], [0, rrange[1]/2] ]
+    
+  elif len(nebs) == 3: # for 3-point starters
+    pts = [ [0,0], [(rrange[1])/3,1], [2*(rrange[1])/3,1], [0,1] ]
+    connections = [[0,1],[0,2], [0,3]]
+    prevpt = [2*pi/3,1]
+    bounds = [ rrange, [0.5*(rrange[1])/3, 1.5*(rrange[1])/3], 
+                       [(rrange[1])/2, 2.5*(rrange[1])/3], 
+                       [2.5*(rrange[1])/3, 0.5*(rrange[1])/3] ]
+  
+  elif len(nebs) == 4: # for 4-point starters
+    pts = [ [0,0],[1*(rrange[1])/8,1],[3*(rrange[1])/8,1],
+            [5*(rrange[1])/8,1], [7*(rrange[1])/8,1] ]
+    connections = [[0,1],[0,2], [0,3], [0,4]]
+    prevpt = [pi/4,1]
+    # new_pts, new_bounds = stem([0,pi],layersB[1][0][0], 2)
+    bounds = [rrange, [0, 2*(rrange[1])/8], [2*(rrange[1])/8, 4*(rrange[1])/8],
+                      [4*(rrange[1])/8, 6*(rrange[1])/8],
+                      [6*(rrange[1])/8, 0]]
+  
+  else:
+    print("Don't know how to handle %i starting points" %len(nebs))
+    return None
+  return pts, connections, prevpt, bounds
+
+
+
+def rect_dendrogram(geo, nlayers=10, show=True, colors='trippy',
+                      rrange=[0,2*pi], id_axons=None):
+  """
+  Can be run for many if type(geofiles) is list.
+  """
+  if type(geo) is str:
+    geo = [demoReadsilent(geo)]
+  # Get started
+  pts, connections, prevpt, bounds = get_started_rect(geo, rrange)
+  # Get the layers
+  layers, axon_dict = branch_layers(geo, nlayers, id_axons)
+  # Create the radial structure for _nlayers_
+  for layer in range(1, len(layers)):
+    pts, bounds, connections = next_layer(layers, layer, pts, bounds,
+                                          connections)
+  
+  # Then plot
+  # convert to rectalinear points from polar
+  rpts = [from_polar(p) for p in pts]
+  if colors is None:
+    colors = ['k' for i in range(3000)] # Should be large enough
+  if colors is 'trippy':
+    colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*600
+  plot_rect_dend(connections, rpts, colors, axon_dict)
+  
+  return
+
+
+
 
 
 
@@ -223,7 +318,7 @@ def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy'):
 
 
 
-def plot_radial_dend(connections, pts, colors=None):
+def plot_radial_dend(connections, pts, colors=None, axon_dict=None):
   """
   Returns a plot -- but does not show it (allows for subplots).
   """
@@ -349,10 +444,10 @@ def many_skeletons(geofiles, labels=None):
     print('Only using first 9 (of %i) geo files' %len(geofiles))
     geofiles = geofiles[:9]
   fig = plt.figure()
-  for range(len(geofiles)):
+  for g in range(len(geofiles)):
     ax = fig.add_subplot(sizes[len(geofiles)][g])
     nodes, sources, targets = get_nodes(geofiles[g])
-    return
+  return
   
   
   
@@ -374,7 +469,7 @@ if __name__ == "__main__":
   
 
 
-
+#########################################################################
 #########################################################################
 # old code -- NOT IN USE
 
