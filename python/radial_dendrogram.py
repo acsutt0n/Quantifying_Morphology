@@ -333,6 +333,11 @@ def plot_radial_dend(connections, pts, colors=None, axon_dict=None):
       col='k'
     plt.plot([pts[c[0]][0], pts[c[1]][0]], 
              [pts[c[0]][1], pts[c[1]][1]], c=col) # omit c for multicolored (kinda fun)
+    
+    if axon_dict is not None: # Plot the axons, if passed
+      for ax in axon_dict:
+        if connections.index(c) == ax[0]
+    
 
 
 
