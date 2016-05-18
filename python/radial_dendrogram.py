@@ -65,11 +65,19 @@ def branch_layers(geo, nlayers=None, id_axons=None):
       for n in branchlist[s].neighbors: # For each neighboring branch
         if id_axons is None: # Use native axon tags
           if 'Axon' in n.tags:
-            axon_dict.append([cnt, s, geo.branches.index(n)])
-          else: # Use the geo.branches index
-            for ax in id_axons:
-              if geo.branches.index(n) == ax:
+            if len(axon_dict) < 1:
+              axon_dict.append([cnt, s, geo.branches.index(n)])
+            elif geo.branches.index(n) not in [j[2] for j in axon_dict]:
+              axon_dict.append([cnt, s, geo.branches.index(n)])
+        else: # Use the geo.branches index
+          for ax in id_axons:
+            if geo.branches.index(n) == ax:
+              if len(axon_dict) < 1:
                 axon_dict.append([cnt, s, geo.branches.index(n)])
+              elif geo.branches.index(n) not in [j[2] for j in axon_dict]:
+                axon_dict.append([cnt, s, geo.branches.index(n)])
+                # axon_dict format:
+                # [which layer #, which branch, branch index]
         if n not in used and n not in newbranchlist:
           newbranchlist.append(n)
           nebcnt += 1 # Increment neighbor count
@@ -189,18 +197,23 @@ def get_started_radial(geo, rrange=[0,2*pi]):
 
 
 
-def next_layer(layers, n, pts, bounds, connections):
+def next_layer(layers, n, pts, bounds, connections, axon_dict):
   """ 
-  Map up to _n_ layers.
+  Map up to _n_ layers; note the axon locations when they occur
   """
   completed = many_completed(layers, n-1)
+  
   for l in range(len(layers[n])):
     if layers[n][l]:
+      for ax in axon_dict:
+        if ax[0] == n and ax[1] == l: # Found a matching axon
+          axon_dict[axon_dict.index(ax)].append(len(pts)-1)
+          
       prevpt = pts[completed+l] # changed from pts[completed+l]
       new_pts, new_bounds = stem(bounds[completed+l], layers[n][l][0], n+1)
       pts, connections, bounds = concat_points(new_pts, new_bounds, prevpt,
                                                pts, connections, bounds)
-  return pts, bounds, connections
+  return pts, bounds, connections, axon_dict
 
 
 
@@ -213,13 +226,14 @@ def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy',
     geo = [demoReadsilent(geo)]
   # Get started
   pts, connections, prevpt, bounds = get_started_radial(geo, rrange)
-  # Get the layers
+  # Get the layers and the axon locations
   layers, axon_dict = branch_layers(geo, nlayers, id_axons)
   # Create the radial structure for _nlayers_
   for layer in range(1, len(layers)):
-    pts, bounds, connections = next_layer(layers, layer, pts, bounds,
-                                          connections)
+    pts, bounds, connections, axon_dict = next_layer(layers, layer, pts, bounds,
+                                                 connections, axon_dict)
   
+  print(axon_dict)
   # Then plot
   # convert to rectalinear points from polar
   rpts = [from_polar(p) for p in pts]
@@ -229,12 +243,15 @@ def radial_dendrogram(geo, nlayers=10, show=True, colors='trippy',
     colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*600
   plot_radial_dend(connections, rpts, colors, axon_dict)
   
+  if show:
+    plt.show()
   return
+
 
 # RECTANGULAR
 
 
-def get_started_rect(geo, rrange=[0,2*pi]):
+def get_started_rect(geo, rrange=[0,10]):
   """
   rrange always starts at 0.
   """
@@ -250,24 +267,26 @@ def get_started_rect(geo, rrange=[0,2*pi]):
     # Should check len(nebs), is == 1 continue, else exit loop
   
   if len(nebs) == 2: # for 2-point starters:
-    pts = [ [0,0],[3*(rrange[1])/4,1],[1*rrange[1]/4,1] ]
+    pts = [ [np.mean(rrange),0],[3*(rrange[1])/4,1],[1*rrange[1]/4,1] ]
     connections = [[0,1],[0,2]]
-    prevpt = [pi/2,1]
+    prevpt = pts[-1]
     bounds = [ rrange, [rrange[1]/2,rrange[1]], [0, rrange[1]/2] ]
     
   elif len(nebs) == 3: # for 3-point starters
-    pts = [ [0,0], [(rrange[1])/3,1], [2*(rrange[1])/3,1], [0,1] ]
+    pts = [ [np.mean(rrange),0], [1*(rrange[1])/3,1],  
+            [np.mean(rrange),1],
+            [2*(rrange[1])/3,1],  ] # previously: [0,1]
     connections = [[0,1],[0,2], [0,3]]
-    prevpt = [2*pi/3,1]
-    bounds = [ rrange, [0.5*(rrange[1])/3, 1.5*(rrange[1])/3], 
-                       [(rrange[1])/2, 2.5*(rrange[1])/3], 
-                       [2.5*(rrange[1])/3, 0.5*(rrange[1])/3] ]
+    prevpt = pts[-1]
+    bounds = [ rrange, [0*(rrange[1])/3, 1*(rrange[1])/3], 
+                       [1*(rrange[1])/3, 2*(rrange[1])/3], 
+                       [2*(rrange[1])/3, 3*(rrange[1])/3] ]
   
   elif len(nebs) == 4: # for 4-point starters
-    pts = [ [0,0],[1*(rrange[1])/8,1],[3*(rrange[1])/8,1],
+    pts = [ [np.mean(rrange),0],[1*(rrange[1])/8,1],[3*(rrange[1])/8,1],
             [5*(rrange[1])/8,1], [7*(rrange[1])/8,1] ]
     connections = [[0,1],[0,2], [0,3], [0,4]]
-    prevpt = [pi/4,1]
+    prevpt = pts[-1]
     # new_pts, new_bounds = stem([0,pi],layersB[1][0][0], 2)
     bounds = [rrange, [0, 2*(rrange[1])/8], [2*(rrange[1])/8, 4*(rrange[1])/8],
                       [4*(rrange[1])/8, 6*(rrange[1])/8],
@@ -281,7 +300,7 @@ def get_started_rect(geo, rrange=[0,2*pi]):
 
 
 def rect_dendrogram(geo, nlayers=10, show=True, colors='trippy',
-                      rrange=[0,2*pi], id_axons=None):
+                      rrange=[0,10], id_axons=None):
   """
   Can be run for many if type(geofiles) is list.
   """
@@ -291,20 +310,23 @@ def rect_dendrogram(geo, nlayers=10, show=True, colors='trippy',
   pts, connections, prevpt, bounds = get_started_rect(geo, rrange)
   # Get the layers
   layers, axon_dict = branch_layers(geo, nlayers, id_axons)
+  
   # Create the radial structure for _nlayers_
   for layer in range(1, len(layers)):
-    pts, bounds, connections = next_layer(layers, layer, pts, bounds,
-                                          connections)
+    pts, bounds, connections, axon_dict = next_layer(layers, layer, pts, bounds,
+                                                   connections, axon_dict)
   
+  print(axon_dict)
   # Then plot
   # convert to rectalinear points from polar
-  rpts = [from_polar(p) for p in pts]
   if colors is None:
     colors = ['k' for i in range(3000)] # Should be large enough
   if colors is 'trippy':
     colors = ['r', 'orange', 'y', 'g', 'b', 'purple']*600
-  plot_rect_dend(connections, rpts, colors, axon_dict)
+  plot_rect_dend(connections, pts, colors, axon_dict)
   
+  if show:
+    plt.show()
   return
 
 
@@ -321,27 +343,36 @@ def rect_dendrogram(geo, nlayers=10, show=True, colors='trippy',
 def plot_radial_dend(connections, pts, colors=None, axon_dict=None):
   """
   Returns a plot -- but does not show it (allows for subplots).
+  axon_dict -- [
   """
   #fig = plt.figure()
   # ax = fig.add_subplot(111)
   plt.scatter(0.5,0, c='k', s=50)
   plt.plot([0.5,0],[0,0], c='k')
   for c in connections:
-    if colors:
-      col = colors[connections.index(c)]
-    else:
-      col='k'
+    try:
+      if colors:
+        col = colors[connections.index(c)]
+      else:
+        col='k'
+    except:
+      col = 'k'
     plt.plot([pts[c[0]][0], pts[c[1]][0]], 
              [pts[c[0]][1], pts[c[1]][1]], c=col) # omit c for multicolored (kinda fun)
     
-    if axon_dict is not None: # Plot the axons, if passed
-      for ax in axon_dict:
-        if connections.index(c) == ax[0]
+  if axon_dict is not None: # Plot the axons, if passed
+    for ax in axon_dict:
+      try:
+        print(pts[ax[3]][0][0], pts[ax[3]][1][0])
+        plt.scatter(pts[ax[3]][0][0], pts[ax[3]][1][0], color='r')
+        plt.text(pts[ax[3]][0][0], pts[ax[3]][1][0], ax[2], color='r')
+      except:
+        pass
     
 
 
 
-def many_radial_dend(geofiles, nlayers=None):
+def many_radial_dend(geofiles, nlayers=None, rrange=[0,2*pi], id_axons=None):
   """
   Plot many radial dendrograms in a subplot.
   """
@@ -349,13 +380,69 @@ def many_radial_dend(geofiles, nlayers=None):
   dims = [int(len(geofiles)/4.+1),4]
   for g in range(len(geofiles)):
     plt.subplot(dims[0], dims[1], g+1)
-    radial_dendrogram(geofiles[g], nlayers=nlayers, colors=None)
+    radial_dendrogram(geofiles[g], nlayers=nlayers, rrange=rrange, 
+                      id_axons=id_axons, colors=None)
     plt.title(geofiles[g].name)
     # Get rid of side labels
     plt.axis('off')
   plt.show()
 
 
+
+def plot_rect_dend(connections, pts, colors=None, axon_dict=None):
+  """
+  Returns a plot -- but does not show it (allows for subplots).
+  axon_dict -- [
+  """
+  #fig = plt.figure()
+  # ax = fig.add_subplot(111)
+  plt.scatter(pts[0][0], pts[0][1], c='k', s=50)
+  
+  for c in connections:
+    try:
+      if colors:
+        col = colors[connections.index(c)]
+      else:
+        col='k'
+    except:
+      col = 'k'
+    plt.plot([pts[c[0]][0], pts[c[1]][0]], 
+             [pts[c[0]][1], pts[c[1]][1]], c=col, alpha=0.5) 
+    
+  if axon_dict is not None: # Plot the axons, if passed
+    for ax in axon_dict:
+      try:
+        print(pts[ax[3]][0], pts[ax[3]][1])
+        plt.scatter(pts[ax[3]][0], pts[ax[3]][1], color='r', s=50)
+        plt.text(pts[ax[3]][0], pts[ax[3]][1], ax[2], color='r')
+      except:
+        print('Could not print'); print(ax)
+        print()
+    
+
+
+def many_rect_dend(geofiles, nlayers=None, rrange=[0,10], id_axons=None):
+  """
+  Plot many radial dendrograms in a subplot.
+  """
+  # 4 in a row
+  dims = [int(len(geofiles)/4.+1),4]
+  if id_axons is None:
+    id_axons = [None for n in range(len(geofiles))]
+  elif type(id_axons) is list:
+    if len(id_axons) != len(geofiles):
+      print('Axons (%i) and geofiles (%i) different lengths!' 
+            %(len(id_axons), len(geofiles)))
+      return
+
+  for g in range(len(geofiles)):
+    plt.subplot(dims[0], dims[1], g+1)
+    rect_dendrogram(geofiles[g], nlayers=nlayers, colors=None, 
+                    rrange=rrange, show=False, id_axons=id_axons[g])
+    plt.title(geofiles[g].name)
+    # Get rid of side labels
+    plt.axis('off')
+  plt.show()
 
 
 
@@ -455,7 +542,7 @@ def many_skeletons(geofiles, labels=None):
   return
   
   
-  
+
   
 #########################################################################
 
